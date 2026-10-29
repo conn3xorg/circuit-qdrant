@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Conn3x
+        env: &gh
+          GH_TOKEN: ${{ github.token }}
+        run: &install |
+          tag=$(gh release view -R conn3xorg/conn3x --json tagName -q .tagName)
+          file="conn3x_${tag#v}_linux_amd64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/$file"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/checksums.txt"
+          grep " $file\$" checksums.txt | sha256sum -c -
+          mkdir -p bin && tar -xzf "$file" -C bin conn3x
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: conn3x version
+      - run: conn3x fmt -check -recursive
+      - name: Validate
+        run: conn3x init -backend=false && conn3x validate
+      - name: Validate the example
+        working-directory: examples/local
+        run: conn3x init -backend=false && conn3x validate
+
+  e2e:
+    needs: validate
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [rocky10, fedora45, ubuntu2404, debian13]
+    name: e2e (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The test host images live in the Conn3x repo.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: conn3xorg/conn3x
+          ref: main
+          path: conn3x
+          persist-credentials: false
+          sparse-checkout: test/images
+      - name: Install Conn3x
+        env: *gh
+        run: *install
+      - name: Start the ${{ matrix.distro }} host
+        working-directory: examples/local
+        env:
+          CONTAINERFILE: ${{ github.workspace }}/conn3x/test/images/${{ matrix.distro }}/Containerfile
+        run: ./up.sh
+      - name: Apply, then plan again with no changes
+        working-directory: examples/local
+        env:
+          TF_VAR_api_key: ci-only-api-key-0123456789
+        run: |
+          conn3x init
+          conn3x apply -auto-approve
+          conn3x plan -detailed-exitcode
+      # Creates a collection, upserts a point and finds it again by search,
+      # all with the key. A request without it must get 401.
+      - name: Store a vector and search for it
+        run: |
+          podman exec -i circuit-qdrant sh -eu <<'EOF'
+          u=http://127.0.0.1:6333
+          k='api-key: ci-only-api-key-0123456789'
+          j='Content-Type: application/json'
+          [ "$(stat -c %a /etc/qdrant/config.yaml)" = 600 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' $u/collections)" = 401 ]
+          curl -sSf -X PUT -H "$k" -H "$j" $u/collections/notes -d '{"vectors":{"size":4,"distance":"Cosine"}}'
+          curl -sSf -X PUT -H "$k" -H "$j" "$u/collections/notes/points?wait=true" -d '{"points":[{"id":7,"vector":[0.9,0.1,0.1,0.1],"payload":{"text":"hello"}},{"id":8,"vector":[0.1,0.9,0.1,0.1],"payload":{"text":"other"}}]}'
+          curl -sSf -X POST -H "$k" -H "$j" $u/collections/notes/points/query -d '{"query":[0.8,0.2,0.1,0.1],"limit":1,"with_payload":true}' | tee /dev/stderr | grep -q '"points":\[{"id":7,'
+          EOF
+      - name: Clean up
+        if: always()
+        working-directory: examples/local
+        run: ./down.sh
