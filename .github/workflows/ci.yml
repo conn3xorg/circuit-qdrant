@@ -97,6 +97,26 @@ jobs:
           curl -sSf -X PUT -H "$k" -H "$j" "$u/collections/notes/points?wait=true" -d '{"points":[{"id":7,"vector":[0.9,0.1,0.1,0.1],"payload":{"text":"hello"}},{"id":8,"vector":[0.1,0.9,0.1,0.1],"payload":{"text":"other"}}]}'
           curl -sSf -X POST -H "$k" -H "$j" $u/collections/notes/points/query -d '{"query":[0.8,0.2,0.1,0.1],"limit":1,"with_payload":true}' | tee /dev/stderr | grep -q '"points":\[{"id":7,'
           EOF
+      # Restarting the container boots systemd again, so this checks Qdrant
+      # is enabled and comes back with its config, key and stored points.
+      - name: Restart the host, then find the vector again
+        run: |
+          podman restart circuit-qdrant
+          for _ in $(seq 60); do
+            case $(podman exec circuit-qdrant systemctl is-system-running 2>/dev/null) in running|degraded) break ;; esac
+            sleep 1
+          done
+          podman exec -i circuit-qdrant sh -eu <<'EOF'
+          u=http://127.0.0.1:6333
+          k='api-key: ci-only-api-key-0123456789'
+          j='Content-Type: application/json'
+          for _ in $(seq 30); do
+            curl -sf -o /dev/null -H "$k" $u/collections/notes && break
+            sleep 1
+          done
+          [ "$(curl -s -o /dev/null -w '%{http_code}' $u/collections)" = 401 ]
+          curl -sSf -X POST -H "$k" -H "$j" $u/collections/notes/points/query -d '{"query":[0.8,0.2,0.1,0.1],"limit":1,"with_payload":true}' | tee /dev/stderr | grep -q '"points":\[{"id":7,'
+          EOF
       - name: Clean up
         if: always()
         working-directory: examples/local
