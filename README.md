@@ -17,7 +17,7 @@ variable "qdrant_api_key" {
 }
 
 module "qdrant" {
-  source = "github.com/conn3xorg/circuit-qdrant?ref=v0.1.0"
+  source = "github.com/conn3xorg/circuit-qdrant?ref=v0.1.1"
 
   hosts                = { vectors1 = "203.0.113.10" }
   ssh_private_key_file = "~/.ssh/id_ed25519"
@@ -84,7 +84,7 @@ Set `qdrant_version` and `checksums` together. The release page lists each asset
 
 ```hcl
 module "qdrant" {
-  source = "github.com/conn3xorg/circuit-qdrant?ref=v0.1.0"
+  source = "github.com/conn3xorg/circuit-qdrant?ref=v0.1.1"
 
   hosts          = { vectors1 = "203.0.113.10" }
   qdrant_version = "1.20.0"
