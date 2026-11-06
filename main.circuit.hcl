@@ -87,6 +87,15 @@ circuit "qdrant" {
     }
   }
 
+  # mkdir would make /opt/qdrant with the login session's umask, and under
+  # circuit-hardening's 027 the qdrant user couldn't reach its binary.
+  step "opt_dir" {
+    directory {
+      path = "/opt/qdrant"
+      mode = "0755"
+    }
+  }
+
   step "release_dir" {
     directory {
       path = local.dir
